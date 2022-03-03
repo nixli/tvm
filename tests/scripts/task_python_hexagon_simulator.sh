@@ -23,6 +23,15 @@ source tests/scripts/setup-pytest-env.sh
 
 make cython3
 
-# unset because hardware does not exist in CI.
-unset ANDROID_SERIAL_NUMBER
+export TVM_TRACKER_PORT=9190
+export TVM_TRACKER_HOST=0.0.0.0
+env PYTHONPATH=python python3 -m tvm.exec.rpc_tracker --host "${TVM_TRACKER_HOST}" --port "${TVM_TRACKER_PORT}" &
+TRACKER_PID=$!
+sleep 5   # Wait for tracker to bind
+
+# HEXAGON_TOOLCHAIN is already set
+export HEXAGON_SDK_ROOT=${HEXAGON_SDK_PATH}
+export ANDROID_SERIAL_NUMBER=simulator
 run_pytest ctypes python-contrib-hexagon-no-hardware tests/python/contrib/test_hexagon/test_launcher.py
+
+kill ${TRACKER_PID}

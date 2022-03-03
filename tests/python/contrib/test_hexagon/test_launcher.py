@@ -30,6 +30,12 @@ import tvm.contrib.hexagon.hexagon as hexagon
 
 from .conftest import requires_hexagon_toolchain
 
+# NOTE on server ports:
+# These tests use different port numbers for the RPC server (7070 + ...).
+# The reason is that an RPC session cannot be gracefully closed without
+# triggering TIME_WAIT state on the server socket. This prevents another
+# server to bind to the same port until the wait time elapses.
+
 
 @requires_hexagon_toolchain
 def test_add(android_serial_number, tvm_tracker_host, tvm_tracker_port):
@@ -53,9 +59,9 @@ def test_add(android_serial_number, tvm_tracker_host, tvm_tracker_port):
         pytest.skip("Skip hardware test since ANDROID_SERIAL_NUMBER is not set.")
 
     rpc_info = {
-      "rpc_tracker_host" : tvm_tracker_host,
-      "rpc_tracker_port" : tvm_tracker_port,
-      "rpc_server_port" : 7070,
+        "rpc_tracker_host": tvm_tracker_host,
+        "rpc_tracker_port": tvm_tracker_port,
+        "rpc_server_port": 7070,  # See note at the beginning of the file
     }
     launcher = HexagonLauncher(serial_number=android_serial_number, rpc_info=rpc_info)
     launcher.upload(dso_binary_path, dso_binary)
@@ -69,9 +75,9 @@ def test_add(android_serial_number, tvm_tracker_host, tvm_tracker_port):
         assert (B_data.numpy() == np.array([4])).all()
         C_data = tvm.nd.array(np.array([0, 0], dtype=dtype), device=sess.device)
         assert (C_data.numpy() == np.array([0, 0])).all()
-
         mod["add"](A_data, B_data, C_data)
         assert (C_data.numpy() == np.array([6, 7])).all()
+
     launcher.stop_server()
 
 
@@ -97,9 +103,9 @@ def test_add_vtcm(android_serial_number, tvm_tracker_host, tvm_tracker_port):
         pytest.skip("Skip hardware test since ANDROID_SERIAL_NUMBER is not set.")
 
     rpc_info = {
-      "rpc_tracker_host" : tvm_tracker_host,
-      "rpc_tracker_port" : tvm_tracker_port,
-      "rpc_server_port" : 7070,
+        "rpc_tracker_host": tvm_tracker_host,
+        "rpc_tracker_port": tvm_tracker_port,
+        "rpc_server_port": 7071,  # See note at the beginning of the file
     }
     launcher = HexagonLauncher(serial_number=android_serial_number, rpc_info=rpc_info)
     launcher.upload(dso_binary_path, dso_binary)
@@ -119,6 +125,7 @@ def test_add_vtcm(android_serial_number, tvm_tracker_host, tvm_tracker_port):
         mod["add"](A_data, B_data, C_data)
         result = C_data.numpy()
         assert (result == np.array([6, 7])).all()
+
     launcher.stop_server()
 
 
@@ -149,9 +156,9 @@ class TestMatMul:
             pytest.skip("Skip hardware test since ANDROID_SERIAL_NUMBER is not set.")
 
         rpc_info = {
-          "rpc_tracker_host" : tvm_tracker_host,
-          "rpc_tracker_port" : tvm_tracker_port,
-          "rpc_server_port" : 7070,
+            "rpc_tracker_host": tvm_tracker_host,
+            "rpc_tracker_port": tvm_tracker_port,
+            "rpc_server_port": 7072,  # See note at the beginning of the file
         }
         launcher = HexagonLauncher(serial_number=android_serial_number, rpc_info=rpc_info)
         launcher.upload(dso_binary_path, dso_binary)
@@ -220,9 +227,9 @@ def test_graph_executor(android_serial_number, tvm_tracker_host, tvm_tracker_por
         pytest.skip("Skip hardware test since ANDROID_SERIAL_NUMBER is not set.")
 
     rpc_info = {
-      "rpc_tracker_host" : tvm_tracker_host,
-      "rpc_tracker_port" : tvm_tracker_port,
-      "rpc_server_port" : 7070,
+        "rpc_tracker_host": tvm_tracker_host,
+        "rpc_tracker_port": tvm_tracker_port,
+        "rpc_server_port": 7073,  # See note at the beginning of the file
     }
     launcher = HexagonLauncher(serial_number=android_serial_number, rpc_info=rpc_info)
     launcher.upload(dso_binary_path, dso_binary)
