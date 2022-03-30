@@ -22,7 +22,7 @@ import tvm.testing
 from tvm import te
 from tvm.contrib import utils
 from tvm.contrib.hexagon.build import HexagonLauncher
-import tvm.contrib.hexagon.hexagon as hexagon
+import tvm.contrib.hexagon as hexagon
 
 from .conftest import requires_hexagon_toolchain
 
@@ -63,7 +63,7 @@ def intrin_mem_copy(shape, dtype, dst_scope, src_scope):
 
 
 @requires_hexagon_toolchain
-def test_cache_read_write(android_serial_number, tvm_tracker_host, tvm_tracker_port):
+def test_cache_read_write(hexagon_session):
     size = 128
     outer_shape = (size,)
     factor = 16
@@ -103,30 +103,24 @@ def test_cache_read_write(android_serial_number, tvm_tracker_host, tvm_tracker_p
     func = tvm.build(
         s, [x, y, z], tvm.target.Target(target_hexagon, host=target_hexagon), name="dmacpy"
     )
-    temp = utils.tempdir()
-    dso_binary = "test_binary.so"
-    dso_binary_path = temp.relpath(dso_binary)
-    func.save(dso_binary_path)
 
-    if not android_serial_number:
+    if hexagon_session is None:
         pytest.skip("Skip hardware test since ANDROID_SERIAL_NUMBER is not set.")
 
-    rpc_info = {
-        "rpc_tracker_host": tvm_tracker_host,
-        "rpc_tracker_port": tvm_tracker_port,
-        "rpc_server_port": 7070,
-    }
-    launcher = HexagonLauncher(serial_number=android_serial_number, rpc_info=rpc_info)
-    launcher.upload(dso_binary_path, dso_binary)
-    launcher.start_server()
-
-    with launcher.start_session() as sess:
-        mod = launcher.load_module(dso_binary, sess)
-        xt = tvm.nd.array(np.random.uniform(size=size).astype(x.dtype), device=sess.device)
-        yt = tvm.nd.array(np.random.uniform(size=size).astype(y.dtype), device=sess.device)
-        zt = tvm.nd.array(np.random.uniform(size=size).astype(z.dtype), device=sess.device)
-        mod["dmacpy"](xt, yt, zt)
-    launcher.stop_server()
+    mod = hexagon_session.load_module(func)
+    xt = tvm.nd.array(
+        np.random.randint(low=-128, high=127, size=size, dtype=x.dtype),
+        device=hexagon_session.device,
+    )
+    yt = tvm.nd.array(
+        np.random.randint(low=-128, high=127, size=size, dtype=y.dtype),
+        device=hexagon_session.device,
+    )
+    zt = tvm.nd.array(
+        np.random.randint(low=-128, high=127, size=size, dtype=z.dtype),
+        device=hexagon_session.device,
+    )
+    mod["dmacpy"](xt, yt, zt)
 
     ref = xt.numpy() + yt.numpy()
     np.testing.assert_equal(zt.numpy(), ref)

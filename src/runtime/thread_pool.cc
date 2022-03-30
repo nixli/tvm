@@ -386,7 +386,6 @@ TVM_REGISTER_GLOBAL("runtime.config_threadpool").set_body([](TVMArgs args, TVMRe
     for (auto cpu : cpu_array) {
       ICHECK(IsNumber(cpu)) << "The CPU core information '" << cpu << "' is not a number.";
       cpus.push_back(std::stoi(cpu));
-      std::cout << "cpu is " << cpu << std::endl;
     }
   }
   threading::Configure(mode, nthreads, cpus);
@@ -396,8 +395,8 @@ namespace threading {
 void ResetThreadPool() { tvm::runtime::ThreadPool::ThreadLocal()->Reset(); }
 /*!
  * \brief configure the CPU id affinity
- * \param mode The preferred CPU type (1 = big, -1 = little, -2 = specify ,
- *  -3 = kSpecifyOneCorePerThread, -3 = kSpecifyThreadShareAllCore).
+ * \param mode The preferred CPU type (1 = big, -1 = little, -2 = kSpecifyOneCorePerThread,
+ *  -3 = kSpecifyThreadShareAllCore).
  * \param nthreads The number of threads to use (0 = use all).
  * \param cpus cpus A list of CPUs is used to set the 'cpu affinity' for the worker threads.
  *

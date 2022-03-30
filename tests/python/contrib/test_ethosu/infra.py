@@ -23,6 +23,7 @@ This class include methods to parse the custom operator to extract
 the command stream and perform an equivalency check for single operator
 test cases.
 """
+from distutils.version import LooseVersion
 from typing import List
 
 import os
@@ -195,7 +196,16 @@ def generate_ref_data_tflite(model):
     The random input data and generated output data are returned.
     """
     expected_output_data = {}
-    interpreter = tf.lite.Interpreter(model_content=model)
+
+    # older versions of TFLite don't give access to reference kernels
+    if tf.__version__ < LooseVersion("2.5.0"):
+        interpreter = tf.lite.Interpreter(model_content=model)
+    else:
+        interpreter = tf.lite.Interpreter(
+            model_content=model,
+            experimental_op_resolver_type=tf.lite.experimental.OpResolverType.BUILTIN_REF,
+        )
+
     interpreter.allocate_tensors()
 
     input_details = interpreter.get_input_details()
@@ -276,8 +286,8 @@ def get_convolutional_args(call, include_buffers=False, remove_constants=False):
             continue
         elif isinstance(arg, tvm.tir.expr.IntImm) or isinstance(arg, tvm.tir.expr.FloatImm):
             conv_args.append(arg.value)
-        elif isinstance(arg, tvm.tir.expr.Load) and not include_buffers:
-            conv_args.append(arg.index)
+        elif isinstance(arg, tvm.tir.expr.BufferLoad) and not include_buffers:
+            conv_args.append(arg.indices[0])
         else:
             conv_args.append(arg)
 
@@ -428,8 +438,8 @@ def get_pooling_args(call, include_buffers=False):
     for i, arg in enumerate(args):
         if isinstance(arg, tvm.tir.expr.IntImm) or isinstance(arg, tvm.tir.expr.FloatImm):
             pooling_args.append(arg.value)
-        elif isinstance(arg, tvm.tir.expr.Load) and not include_buffers:
-            pooling_args.append(arg.index)
+        elif isinstance(arg, tvm.tir.expr.BufferLoad) and not include_buffers:
+            pooling_args.append(arg.indices[0])
         else:
             pooling_args.append(arg)
 
@@ -479,8 +489,8 @@ def get_binary_elementwise_args(call, include_buffers=False):
     for i, arg in enumerate(args):
         if isinstance(arg, tvm.tir.expr.IntImm) or isinstance(arg, tvm.tir.expr.FloatImm):
             binary_elementwise_args.append(arg.value)
-        elif isinstance(arg, tvm.tir.expr.Load) and not include_buffers:
-            binary_elementwise_args.append(arg.index)
+        elif isinstance(arg, tvm.tir.expr.BufferLoad) and not include_buffers:
+            binary_elementwise_args.append(arg.indices[0])
         else:
             binary_elementwise_args.append(arg)
 

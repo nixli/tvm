@@ -108,7 +108,7 @@ class RelayToTIRVisitor : public MixedModeMutator {
     }
 
     tir::PrimFunc replacement_func(func_signature, body, VoidType(), buffer_map,
-                                   DictAttrs(dict_attrs));
+                                   Map<tir::Var, tir::Buffer>(), DictAttrs(dict_attrs));
     ir_module_->Add(global_var, replacement_func);
   }
 
@@ -169,14 +169,12 @@ class RelayToTIRVisitor : public MixedModeMutator {
     int32_t out_channels = qnn::get_const_int(conv2d_attrs->channels);
     int32_t groups = conv2d_attrs->groups;
     std::string kernel_layout = conv2d_attrs->kernel_layout.c_str();
-    int32_t clip_min, clip_max;
+    int32_t clip_min = std::numeric_limits<int8_t>::min();
+    int32_t clip_max = std::numeric_limits<int8_t>::max();
     if (clip_call) {
       const ClipAttrs* clip_attrs = clip_call->attrs.as<ClipAttrs>();
       clip_min = clip_attrs->a_min;
       clip_max = clip_attrs->a_max;
-    } else {
-      clip_min = -128;
-      clip_max = 127;
     }
 
     tvm::Array<PrimExpr> scalar_args = {ToArg(input_offset), ToArg(output_offset), ToArg(stride_w),
@@ -504,8 +502,35 @@ class RelayToTIRVisitor : public MixedModeMutator {
                             buffer_creator.GetBufferMap(), args);
   }
 
+  struct BinaryElementwiseClipPattern {
+    Call binary_op;
+    Optional<Call> clip_op;
+  };
+
+  BinaryElementwiseClipPattern ParseBinaryElementwiseOpClipPattern(const Expr& expr) {
+    BinaryElementwiseClipPattern pattern;
+    Call final_call = GetRef<Call>(expr.as<CallNode>());
+    const OpNode* final_op = final_call->op.as<OpNode>();
+    if (final_op->name == "clip") {
+      pattern.clip_op = final_call;
+      pattern.binary_op = GetRef<Call>(final_call->args[0].as<CallNode>());
+    } else {
+      pattern.binary_op = final_call;
+      pattern.clip_op = Optional<Call>{nullptr};
+    }
+    return pattern;
+  }
+
   void EmitMul(const GlobalVar& global_var, const Expr& expr) {
-    auto* mul_call = expr.as<CallNode>();
+    int32_t output_min = std::numeric_limits<int8_t>::min();
+    int32_t output_max = std::numeric_limits<int8_t>::max();
+    const auto& pattern = ParseBinaryElementwiseOpClipPattern(expr);
+    Call mul_call = pattern.binary_op;
+    if (pattern.clip_op) {
+      const ClipAttrs* clip_attrs = pattern.clip_op.value()->attrs.as<ClipAttrs>();
+      output_min = clip_attrs->a_min;
+      output_max = clip_attrs->a_max;
+    }
 
     const float input_0_scale = GetScalarFromConstant<float>(mul_call->args[2]);
     const int32_t input_0_zero_point = GetScalarFromConstant<int32_t>(mul_call->args[3]);
@@ -538,8 +563,8 @@ class RelayToTIRVisitor : public MixedModeMutator {
         ToArg(output_zero_point),
         ToArg(output_multiplier),
         ToArg(output_shift),
-        ToArg(std::numeric_limits<int8_t>::min()),
-        ToArg(std::numeric_limits<int8_t>::max()),
+        ToArg(output_min),
+        ToArg(output_max),
         tensor_size,
     };
 
@@ -548,7 +573,15 @@ class RelayToTIRVisitor : public MixedModeMutator {
   }
 
   void EmitAdd(const GlobalVar& global_var, const Expr& expr) {
-    auto* add_call = expr.as<CallNode>();
+    int32_t output_min = std::numeric_limits<int8_t>::min();
+    int32_t output_max = std::numeric_limits<int8_t>::max();
+    const auto& pattern = ParseBinaryElementwiseOpClipPattern(expr);
+    Call add_call = pattern.binary_op;
+    if (pattern.clip_op) {
+      const ClipAttrs* clip_attrs = pattern.clip_op.value()->attrs.as<ClipAttrs>();
+      output_min = clip_attrs->a_min;
+      output_max = clip_attrs->a_max;
+    }
 
     const float input_0_scale = GetScalarFromConstant<float>(add_call->args[2]);
     const int32_t input_0_zero_point = GetScalarFromConstant<int32_t>(add_call->args[3]);
@@ -605,13 +638,21 @@ class RelayToTIRVisitor : public MixedModeMutator {
         ToArg(output_zero_point),
         ToArg(output_multiplier),
         ToArg(output_shift),
-        ToArg(std::numeric_limits<int8_t>::min()),
-        ToArg(std::numeric_limits<int8_t>::max()),
+        ToArg(output_min),
+        ToArg(output_max),
         tensor_size,
     };
 
     CreatePrimFuncForExtern(global_var, buffer_creator.GetPrimFuncParams(),
                             buffer_creator.GetBufferMap(), args);
+  }
+
+  // Removes kCompiler attribute from the partitioned functions that are not supported by this
+  // RelayToTIR
+  Call CallToFuncWithoutCompilerAttr(GlobalVar new_global_var, Call call, Function func) {
+    Function new_func = WithoutAttr(std::move(func), attr::kCompiler);
+    ir_module_->Update(new_global_var, new_func);
+    return Call(new_global_var, call->args, call->attrs, call->type_args, call->span);
   }
 
   Expr Rewrite_(const CallNode* pre, const Expr& post) override {
@@ -624,11 +665,21 @@ class RelayToTIRVisitor : public MixedModeMutator {
       auto codegen_name = func->GetAttr<String>(attr::kCompiler);
       if (codegen_name.defined() && codegen_name == "cmsis-nn") {
         const CallNode* inner_call = func->body.as<CallNode>();
-        const FunctionNode* composite_func = inner_call->op.as<FunctionNode>();
-        auto comp_name = composite_func->GetAttr<String>(attr::kComposite);
-        auto func_name = func->GetAttr<String>(::tvm::attr::kGlobalSymbol);
+        auto global_func_name = func->GetAttr<String>(tvm::attr::kGlobalSymbol);
+        GlobalVar new_global_var(global_func_name.value());
 
-        GlobalVar new_global_var(func_name.value());
+        if (!inner_call) {
+          return CallToFuncWithoutCompilerAttr(new_global_var, GetRef<Call>(call),
+                                               GetRef<Function>(func));
+        }
+
+        const FunctionNode* composite_func = inner_call->op.as<FunctionNode>();
+        if (!composite_func) {
+          return CallToFuncWithoutCompilerAttr(new_global_var, GetRef<Call>(call),
+                                               GetRef<Function>(func));
+        }
+
+        auto comp_name = composite_func->GetAttr<String>(attr::kComposite);
         new_global_var->checked_type_ = composite_func->checked_type();
 
         if (comp_name == "cmsis-nn.qnn_softmax") {
